@@ -1,0 +1,106 @@
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::entrypoint::ProgramResult;
+
+declare_id!("YOUR_PROGRAM_ID_HERE");
+
+#[program]
+pub mod crowdfunding {
+    use super::*;
+
+    pub fn create_campaign(
+        ctx: Context<CreateCampaign>,
+        title: String,
+        description: String,
+        target: u64,
+        deadline: i64,
+        image: String,
+    ) -> ProgramResult {
+        let campaign = &mut ctx.accounts.campaign;
+        let clock: Clock = Clock::get().unwrap();
+
+        require!(deadline > clock.unix_timestamp, ErrorCode::InvalidDeadline);
+
+        campaign.owner = ctx.accounts.user.key();
+        campaign.title = title;
+        campaign.description = description;
+        campaign.target = target;
+        campaign.deadline = deadline;
+        campaign.amount_collected = 0;
+        campaign.image = image;
+
+        Ok(())
+    }
+
+    pub fn donate(ctx: Context<Donate>, amount: u64) -> ProgramResult {
+        let campaign = &mut ctx.accounts.campaign;
+        let user = &ctx.accounts.user;
+
+        campaign.donations.push(Donation {
+            donator: *user.key,
+            amount,
+        });
+
+        campaign.amount_collected += amount;
+
+        let ix = anchor_lang::solana_program::system_instruction::transfer(
+            &user.key(),
+            &campaign.owner,
+            amount,
+        );
+        anchor_lang::solana_program::program::invoke(
+            &ix,
+            &[
+                user.to_account_info(),
+                ctx.accounts.system_program.to_account_info(),
+            ],
+        )?;
+
+        Ok(())
+    }
+}
+
+#[derive(Accounts)]
+pub struct CreateCampaign<'info> {
+    #[account(init, payer = user, space = Campaign::LEN)]
+    pub campaign: Account<'info, Campaign>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Donate<'info> {
+    #[account(mut)]
+    pub campaign: Account<'info, Campaign>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[account]
+pub struct Campaign {
+    pub owner: Pubkey,
+    pub title: String,
+    pub description: String,
+    pub target: u64,
+    pub deadline: i64,
+    pub amount_collected: u64,
+    pub image: String,
+    pub donations: Vec<Donation>,
+}
+
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct Donation {
+    pub donator: Pubkey,
+    pub amount: u64,
+}
+
+impl Campaign {
+    const LEN: usize = 8 + 32 + 4 + 50 + 4 + 200 + 8 + 8 + 8 + 4 + 50 + 4 + (32 + 8) * 50;
+}
+
+#[error_code]
+pub enum ErrorCode {
+    #[msg("The deadline should be a date in the future.")]
+    InvalidDeadline,
+}
